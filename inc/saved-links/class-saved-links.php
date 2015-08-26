@@ -1,5 +1,13 @@
 <?php
 
+ob_start(); ?>
+<p class="lr-saved-link #!CLASS!#">
+	#!IMAGE!#
+	<a href="#!URL!#">#!TITLE!#</a>&ndash;<span class="description">#!DESCRIPTION!#</span> <em>#!SOURCE!#</em>
+</p><?php
+
+define('LROUNDUPS_DEFAULT_LINK_HTML', ob_get_clean());
+
 /**
  * The Argo Links class
  * So we don't have function naming conflicts.
@@ -8,13 +16,14 @@
  */
 class SavedLinks {
 
+	protected static $notices = array();
+
 	/**
 	 * Initialize the class.
 	 *
 	 * @since 0.1
 	 */
 	public static function init() {
-
 		/*Register the custom post type of for saved links: rounduplinks */
 		add_action( 'init', array( __CLASS__, 'register_post_type' ) );
 
@@ -40,11 +49,6 @@ class SavedLinks {
 		add_action( 'widgets_init', array( __CLASS__, 'add_saved_links_widget' ) );
 		add_action( 'widgets_init', array( __CLASS__, 'add_link_roundups_widget' ) );
 
-		/*Add our css stylesheet into the header*/
-		add_action( 'admin_print_styles', array( __CLASS__,'add_styles' ) );
-		add_action( 'wp_print_styles', array( __CLASS__, 'add_styles' ) );
-		add_filter( 'mce_css', array( __CLASS__,'plugin_mce_css' ) );
-
 		/* Argo links have no content, so we have to generate it on request */
 		add_filter( 'the_content', array( __CLASS__,'the_content' ) );
 		add_filter( 'the_excerpt', array( __CLASS__,'the_excerpt' ) );
@@ -53,26 +57,14 @@ class SavedLinks {
 		add_filter( 'the_author', array( __CLASS__,'the_author' ) );
 		add_filter( 'the_author_posts_link', array( __CLASS__,'the_author_posts_link' ) );
 
+		/* If we have any admin_notices, print them */
+		add_action('admin_notices', array(__CLASS__, 'admin_notices'));
+
 		/* Register a shortcode to display links */
 		add_shortcode( 'rounduplink', array( __CLASS__,'rounduplink_shortcode' ) );
-	}
 
-	public static function plugin_mce_css( $mce_css ) {
-		if ( !empty( $mce_css ) ) {
-			$mce_css .= ',';
-		} else {
-			$mce_css = '';
-		}
-		$suffix = ( defined( 'SCRIPT_DEBUG' ) && SCRIPT_DEBUG ) ? '' : '.min';
-		$mce_css .= plugins_url( 'css/lroundups' . $suffix . '.css', LROUNDUPS_PLUGIN_FILE );
-		return $mce_css;
-	}
-
-	/*Add our css stylesheet into the header*/
-	public static function add_styles() {
-		$suffix = ( defined( 'SCRIPT_DEBUG' ) && SCRIPT_DEBUG )  ? '' : '.min';
-		$css = plugins_url(  'css/lroundups' . $suffix . '.css', LROUNDUPS_PLUGIN_FILE);
-		wp_enqueue_style( 'link-roundups', $css, array(), 1 );
+		/* Register the ajax call that renders the Saved_Links_List_table class*/
+		add_action( 'wp_ajax_lroundups_saved_links_list_table_render', array( __CLASS__, 'lroundups_saved_links_list_table_render'));
 	}
 
 	/**
@@ -109,10 +101,11 @@ class SavedLinks {
 	 * Register our custom taxonomy
 	 *
 	 * @since 0.1
+	 * @updated 0.3.1
 	 */
 	public static function register_rounduplinks_taxonomy() {
 		register_taxonomy(
-			"argo-link-tags",
+			"lr-tags",
 			'rounduplink',
 			array(
 				'hierarchical' 		=> false,
@@ -129,7 +122,13 @@ class SavedLinks {
 	 * @since 0.1
 	 */
 	public static function add_custom_post_fields() {
-		add_meta_box( 'saved_links_meta', __( 'Link Information', 'link-roundups' ), array( __CLASS__, 'display_custom_fields' ), 'rounduplink', 'normal', 'low' );
+		add_meta_box(
+			'saved_links_meta',
+			__( 'Link Information', 'link-roundups' ),
+			array( __CLASS__, 'display_custom_fields' ),
+			'rounduplink',
+			'normal','low'
+		);
 	}
 
 	/**
@@ -142,20 +141,20 @@ class SavedLinks {
 		global $post;
 		$custom = get_post_custom( $post->ID );
 
-		if ( isset( $custom['argo_link_url'][0] ) ) {
-			$link_url = $custom['argo_link_url'][0];
+		if ( isset( $custom['lr_url'][0] ) ) {
+			$link_url = $custom['lr_url'][0];
 		} else {
 			$link_url = apply_filters( 'default_link_url', '' );
 		}
 
-		if ( isset( $custom['argo_link_description'][0] ) ) {
-			$link_description = $custom['argo_link_description'][0];
+		if ( isset( $custom['lr_desc'][0] ) ) {
+			$link_description = $custom['lr_desc'][0];
 		} else {
 			$link_description = apply_filters( 'default_link_description', '' );
 		}
 
-		if ( isset( $custom['argo_link_source'][0] ) ) {
-			$link_source = $custom['argo_link_source'][0];
+		if ( isset( $custom['lr_source'][0] ) ) {
+			$link_source = $custom['lr_source'][0];
 		} else {
 			$link_source = apply_filters( 'default_link_source', '' );
 		}
@@ -163,18 +162,31 @@ class SavedLinks {
 		$link_img_src = Save_To_Site_Button::default_imgUrl();
 
 	?>
-	<p><label><?php _e( 'URL:', 'link-roundups' ); ?></label><br />
-	<input type='text' name='argo_link_url' value='<?php echo $link_url; ?>' style='width:98%;'/></p>
-	<p><label><?php _e ( 'Description:', 'link-roundups' ); ?></label><br />
-	<textarea cols="100" rows="5" name="argo_link_description" style='width:98%;'><?php echo $link_description; ?></textarea></p>
-	<p><label><?php _e( 'Source:', 'link-roundups' ); ?></label><br />
-	<input type='text' name='argo_link_source' value='<?php echo $link_source; ?>' style='width:98%;'/></p>
+	<p>
+		<label><?php _e( 'URL:', 'link-roundups' ); ?></label><br />
+		<input type='text' name='lr_url' value='<?php echo $link_url; ?>' style='width:98%;'/>
+	</p>
+
+	<p>
+		<label><?php _e ( 'Description:', 'link-roundups' ); ?></label><br />
+		<?php
+			wp_editor($link_description, 'lr_desc', array(
+				'teeny' => true,
+				'media_buttons' => false
+			));
+		?>
+	</p>
+
+	<p>
+		<label><?php _e( 'Source:', 'link-roundups' ); ?></label><br />
+		<input type='text' name='lr_source' value='<?php echo $link_source; ?>' style='width:98%;'/>
+	</p>
 
 	<?php if( $link_img_src ) { ?>
 		<p><label><?php _e( 'Import featured image:', 'link-roundups' ); ?></label><br />
 		<img src="<?php echo $link_img_src ?>" width="300" />
 		<input type='hidden' name='argo_link_img_url' value='<?php echo $link_img_src; ?>'/><br>
-		<input type="checkbox" value="1" name="argo_link_img_url_import" id="argo_link_img_url_import"><label for="argo_link_img_url_import"><?php _e( 'Import as feature image', 'link-roundups' ); ?></label>
+		<input type="checkbox" value="1" name="lr_img" id="lr_img"><label for="lr_img"><?php _e( 'Import as feature image', 'link-roundups' ); ?></label>
 		</p>
 	<?php }
 	}
@@ -186,23 +198,24 @@ class SavedLinks {
 	 */
 	public static function save_custom_fields($post_id) {
 
-		if ( isset( $_POST['argo_link_url'] ) )
-			update_post_meta( ( isset($_POST['post_ID'] ) ? $_POST['post_ID'] : $post_id ), 'argo_link_url', $_POST['argo_link_url'] );
+		if ( isset( $_POST['lr_url'] ) )
+			update_post_meta( ( isset($_POST['post_ID'] ) ? $_POST['post_ID'] : $post_id ), 'lr_url', $_POST['lr_url'] );
 
-		if ( isset( $_POST["argo_link_description"] ) )
-			update_post_meta( ( isset($_POST['post_ID'] ) ? $_POST['post_ID'] : $post_id ), 'argo_link_description', $_POST['argo_link_description'] );
+		if ( isset( $_POST["lr_desc"] ) )
+			update_post_meta( ( isset($_POST['post_ID'] ) ? $_POST['post_ID'] : $post_id ), 'lr_desc', $_POST['lr_desc'] );
 
 
-		if ( isset( $_POST['argo_link_source'] ) )
-			update_post_meta( ( isset( $_POST['post_ID'] ) ? $_POST['post_ID'] : $post_id ), 'argo_link_source', $_POST['argo_link_source'] );
+		if ( isset( $_POST['lr_source'] ) )
+			update_post_meta( ( isset( $_POST['post_ID'] ) ? $_POST['post_ID'] : $post_id ), 'lr_source', $_POST['lr_source'] );
 
-		if ( isset( $_POST['argo_link_img_url_import'] ) && $_POST['argo_link_img_url_import'] ) {
+		if ( isset( $_POST['lr_img'] ) && $_POST['lr_img'] ) {
 			$attachment_id = self::lroundups_media_sideload_image( $_POST['argo_link_img_url'], $post_id );
 			if( !empty( $attachment_id ) && !is_wp_error( $attachment_id )  ) {
 				update_post_meta( ( isset( $_POST['post_ID'] ) ? $_POST['post_ID'] : $post_id ), '_thumbnail_id', $attachment_id );
+			} else {
+				self::add_notice('error', 'Unable to import featured image.');
 			}
 		}
-
 	}
 
 	/**
@@ -268,20 +281,20 @@ class SavedLinks {
 		switch ($column) {
 
 			case 'description':
-				echo $custom['argo_link_description'][0];
+				echo $custom['lr_desc'][0];
 				break;
 
 			case 'url':
-				echo $custom["argo_link_url"][0];
+				echo $custom["lr_url"][0];
 				break;
 
 			case 'link-tags':
 				$base_url = 'edit.php?post_type=rounduplink';
-				$terms = get_the_terms( $post->ID, 'argo-link-tags' );
+				$terms = get_the_terms( $post->ID, 'lr-tags' );
 				if ( is_array( $terms ) ) {
 					$term_links = array();
 					foreach ( $terms as $term ) {
-						$term_links[] = '<a href="' . $base_url . '&argo-link-tags=' . $term->slug . '">' . $term->name . '</a>';
+						$term_links[] = '<a href="' . $base_url . '&lr-tags=' . $term->slug . '">' . $term->name . '</a>';
 					}
 					echo implode( ', ', $term_links );
 				} else {
@@ -408,7 +421,7 @@ class SavedLinks {
 
 		// Only run for argo_links
 		$meta = get_post_meta( $post->ID );
-		$remoteUrl = !empty( $meta['argo_link_url'] ) ? $meta['argo_link_url'][0] : '';
+		$remoteUrl = !empty( $meta['lr_url'] ) ? $meta['lr_url'][0] : '';
 
 		if ( empty( $url ) || !( 'rounduplink' == $post->post_type ) ) {
 			return $url;
@@ -435,7 +448,7 @@ class SavedLinks {
 		$default = '';
 
 		$meta = get_post_meta($post->ID);
-		$source = !empty( $meta['argo_link_source'] ) ? $meta['argo_link_source'][0] : $default;
+		$source = !empty( $meta['lr_source'] ) ? $meta['lr_source'][0] : $default;
 
 		if ( empty( $source ) || !( 'rounduplink' == $post->post_type ) ) {
 			return $author;
@@ -452,7 +465,7 @@ class SavedLinks {
 	 *
 	 * @param string $content content passed in by the filter (should be empty).
 	 */
-	public static function the_author_posts_link(  $link) {
+	public static function the_author_posts_link($link) {
 		global $post;
 
 		if ( !( 'rounduplink' == $post->post_type ) ) {
@@ -461,10 +474,10 @@ class SavedLinks {
 
 		$meta = get_post_meta( $post->ID );
 
-		$url = !empty( $meta['argo_link_url'] ) ? $meta['argo_link_url'][0] : '';
+		$url = !empty( $meta['lr_url'] ) ? $meta['lr_url'][0] : '';
 		$title = get_the_title( $post->ID );
-		$description = array_key_exists( 'argo_link_description', $meta ) ? $meta['argo_link_description'][0] : '';
-		$source = !empty( $meta['argo_link_source'] ) ? $meta['argo_link_source'][0] : '';
+		$description = array_key_exists( 'lr_desc', $meta ) ? $meta['lr_desc'][0] : '';
+		$source = !empty( $meta['lr_source'] ) ? $meta['lr_source'][0] : '';
 
 		$link = sprintf(
 			'<a href="%1$s" title="%2$s" rel="author">%3$s</a>',
@@ -487,12 +500,14 @@ class SavedLinks {
 	 * @param string $content content passed in by the filter (should be empty).
 	 */
 	public static function the_content($content) {
-
 		// Only run for argo_links
 		global $post;
 
 		if (!isset($post))
 			return $content;
+
+		if (is_post_type_archive('rounduplink'))
+			return get_post_meta($post->ID, 'lr_desc', true);
 
 		if ( ! ( 'rounduplink' == $post->post_type ) )
 			return $content;
@@ -532,58 +547,40 @@ class SavedLinks {
 	 * @param string $content content passed in by the filter (should be empty).
 	 */
 	public static function get_html( $post = null, $link_class = null ) {
+		$post = get_post($post);
 
-		$post = get_post(  $post ); // getting a saved link...
-
-		if( !$post )
+		if(!$post)
 			return;
 
-		$meta = get_post_meta( $post->ID ); // getting meta fields from saved link...
+		$meta = get_post_meta($post->ID);
 
-		// first lets get the kind of link
-		$style_class = $link_class; // $link_class is defined below in rounduplink_shortcode()
-		// now check if it's sponsored and set the $sponsored_title
+		$url = !empty($meta['lr_url'])? $meta['lr_url'][0] : '';
+		$description = array_key_exists('lr_desc', $meta)? $meta['lr_desc'][0] : '';
+		$source = !empty($meta['lr_source'])? $meta['lr_source'][0] : '';
 
-		$sponsored_title = !empty( $style_class ) ? __( 'SPONSORED: ', 'link-roundups' ) : '';
-
-		$url = !empty( $meta['argo_link_url']) ? $meta['argo_link_url'][0] : '';
-		$link_title = get_the_title( $post->ID );
-		$title = $sponsored_title . '' . $link_title;
-		$description = array_key_exists( 'argo_link_description', $meta ) ? $meta['argo_link_description'][0] : '';
-		$source = !empty( $meta['argo_link_source']) ? $meta['argo_link_source'][0] : '';
-
-		ob_start();
-		/* begin shortcode output
+		/**
+		 * Allow the ability to manipulate the link title based on the post and link class
 		 *
-		 * NOTE:
-		 * This default output is overwritten 98% of the time by $lroundups_html
-		 * regardless of whether you've modified the code in setting
-		 * Needs improvement in future version
-		*/
-		?>
-	  <p class='lr-saved-link#!CLASS!#'>
-		<a href='#!URL!#'>#!TITLE!#</a>
-		&ndash;
-		<span class='description'>#!DESCRIPTION!#</span>
-		<em>#!SOURCE!#</em>
-	  </p>
+		 * @since 0.3.2
+		 */
+		$title = apply_filters(
+			'lroundups_link_title', get_the_title($post->ID), $post, $link_class);
 
-	  <?php
-		$default_html = ob_get_clean();
+		$lroundups_html = get_option('lroundups_custom_html');
 
-		if ( get_option( 'lroundups_custom_html' ) != '' ) {
-			$lroundups_html = get_option( 'lroundups_custom_html' );
-			$lroundups_html = preg_replace( "/\"/", "'", $lroundups_html );
-		} else {
-			$lroundups_html = $default_html;
-		}
+		if ($lroundups_html == '')
+			$lroundups_html = LROUNDUPS_DEFAULT_LINK_HTML;
 
-		$lroundups_html = str_replace( '#!URL!#', $url, $lroundups_html);
-		$lroundups_html = str_replace( '#!TITLE!#', $title, $lroundups_html);
-		$lroundups_html = str_replace( '#!DESCRIPTION!#', $description, $lroundups_html);
-		$lroundups_html = str_replace( '#!SOURCE!#', $source, $lroundups_html);
-		$lroundups_html = str_replace( '#!CLASS!#', $link_class, $lroundups_html);
-		// $link_class is defined below in rounduplink_shortcode()
+		$lroundups_html = str_replace('#!URL!#', $url, $lroundups_html);
+		$lroundups_html = str_replace('#!TITLE!#', $title, $lroundups_html);
+		$lroundups_html = str_replace('#!DESCRIPTION!#', $description, $lroundups_html);
+		$lroundups_html = str_replace('#!SOURCE!#', $source, $lroundups_html);
+		$lroundups_html = str_replace('#!CLASS!#', $link_class, $lroundups_html);
+
+		if (has_post_thumbnail($post->ID))
+			$lroundups_html = str_replace('#!IMAGE!#', get_the_post_thumbnail($post->ID), $lroundups_html);
+		else
+			$lroundups_html = str_replace('#!IMAGE!#', '', $lroundups_html);
 
 		return $lroundups_html;
 	}
@@ -603,7 +600,6 @@ class SavedLinks {
 			$atts
 		);
 
-		// check if a link has style like 'sponsored'
 		$link_class = (!empty($a['class']))? ' ' . $a['class'] : '';
 
 		// send it all over to get_html (see above)
@@ -630,16 +626,70 @@ class SavedLinks {
 		$custom = get_post_meta( $post->ID );
 
 		ob_start();
-		if ( isset( $custom['argo_link_description'][0] ) )
-			echo '<p class="description">' . $custom['argo_link_description'][0] . '</p>';
-		if ( isset( $custom['argo_link_source'][0] ) && ( $custom['argo_link_source'][0] != '' ) ) {
+		if ( isset( $custom['lr_desc'][0] ) )
+			echo '<p class="description">' . $custom['lr_desc'][0] . '</p>';
+		if ( isset( $custom['lr_source'][0] ) && ( $custom['lr_source'][0] != '' ) ) {
 			echo '<p class="source">' . __('Source: ', 'link-roundups') . '<span>';
-			echo isset( $custom['argo_link_url'][0] ) ? '<a href="' . $custom["argo_link_url"][0] . '">' . $custom["argo_link_source"][0] . '</a>' : $custom["argo_link_source"][0];
+			echo isset( $custom['lr_url'][0] ) ? '<a href="' . $custom["lr_url"][0] . '">' . $custom["lr_source"][0] . '</a>' : $custom["lr_source"][0];
 			echo '</span></p>';
 		}
 		$html = ob_get_clean();
 
 		return $html;
-
 	}
+
+	/*
+	 * Load the Saved_Links_List_Table class
+	 *
+	 * @since 0.3.2
+	 */
+	public static function lroundups_saved_links_list_table_render() {
+		require_once( __DIR__ . '/class-saved-links-list-table.php' );
+
+		// Set up and generate the table.
+		$links_list_table = new Saved_Links_List_Table();
+		$links_list_table->prepare_items();
+		$links_list_table->display();
+		// Reset Query
+		wp_reset_query();
+
+		wp_die();
+	}
+
+	/**
+	 * A utility function for adding admin notices after the save_post action has fired
+	 *
+	 * @since 0.3.2
+	 */
+	public static function add_notice($type, $message) {
+		self::$notices[] = array($type, urlencode($message));
+		add_filter('redirect_post_location', array(__CLASS__, 'add_notice_query_var'), 99);
+	}
+
+	/**
+	 * When the post save_post redirect happens, make sure we're adding the notices arg if necessary
+	 *
+	 * @since 0.3.2
+	 */
+	public static function add_notice_query_var($location) {
+		if (!empty(self::$notices)) {
+			remove_filter('redirect_post_location', array(__CLASS__, 'add_notice_query_var'), 99);
+			return add_query_arg(array('lroundups_notices' => self::$notices), $location);
+		}
+	}
+
+	/**
+	 * If the lroundups_notices $_GET arg is set, print our admin notices
+	 *
+	 * @since 0.3.2
+	 */
+	public static function admin_notices() {
+		if (!isset($_GET['lroundups_notices']))
+			return;
+
+		foreach ($_GET['lroundups_notices'] as $notice) { ?>
+			<div class="<?php echo $notice[0]; ?>"><p><?php echo urldecode($notice[1]); ?></p></div>
+	<?php }
+	}
+
 }

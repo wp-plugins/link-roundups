@@ -1,10 +1,11 @@
 <?php
+
 /*
 Plugin Name: Link Roundups
 Plugin URI: https://github.com/INN/link-roundups
 Description: Use Link Roundups to aggregate links and create roundup posts. Mailchimp API integration and browser bookmark tool. Formerly argo-links from NPR's Project Argo.
 Author: INN, Project Argo, Mission Data
-Version: 0.3.1
+Version: 0.3.2
 Author URI: http://nerds.inn.org/
 License: GPLv2
 
@@ -58,7 +59,7 @@ require_once( 'inc/updates/index.php' );
 
 
 /**
- * On activation, we'll set an option called 'argolinks_flush' to true,
+ * On activation, we'll set an transient (temporary option) called 'lroundups_flush' to true,
  * so our plugin knows, on initialization, to flush the rewrite rules.
  *
  * @link https://gist.github.com/clioweb/871595
@@ -67,7 +68,7 @@ require_once( 'inc/updates/index.php' );
  * @see lroundups_flush_permalinks
  */
 function lroundups_activation() {
-	add_option( 'argolinks_flush', true );
+	set_transient( 'lroundups_flush', true, 30 );
 }
 register_activation_hook( __FILE__, 'lroundups_activation' );
 
@@ -82,7 +83,9 @@ register_activation_hook( __FILE__, 'lroundups_activation' );
  * @see lroundups_flush_permalinks
  */
 function lroundups_deactivation() {
-    delete_option( 'argolinks_flush' );
+	if ( get_transient('lroundups_flush' ) !== false ) {
+		delete_transient( 'lroundups_flush');
+	}
 }
 register_deactivation_hook( __FILE__, 'lroundups_deactivation' );
 
@@ -101,9 +104,9 @@ register_deactivation_hook( __FILE__, 'lroundups_deactivation' );
  * @see lroundups_deactivation
  */
 function lroundups_flush_permalinks() {
-	if (get_option( 'argolinks_flush') == true ) {
+	if (get_transient('lroundups_flush') === true) {
 		flush_rewrite_rules();
-		delete_option( 'argolinks_flush' );
+		delete_transient( 'lroundups_flush' );
 		return true;
 	}
 	return false;
@@ -128,13 +131,16 @@ function link_roundups_enqueue_assets() {
 		array( 'links-common' ), 0.3, true
 	);
 
-	wp_register_style( 'links-common', $plugin_path . '/css/links-common' . $suffix . '.css' );
+	wp_register_style( 'lroundups-admin', $plugin_path . '/css/lroundups-admin' . $suffix . '.css' );
 
 	$screen = get_current_screen();
-	if ( $screen->base == 'post' && $screen->post_type == 'roundup' ) {
+	if ( $screen->base == 'post' && ( $screen->post_type == 'roundup' || $screen->post_type == 'rounduplink' ) ) {
 		wp_enqueue_script( 'link-roundups' );
-		wp_enqueue_style( 'links-common' );
+		wp_enqueue_style( 'lroundups-admin' );
 	}
+
+	if ($screen->base == 'roundup_page_link-roundups-options')
+		wp_enqueue_script('link-roundups');
 }
 add_action( 'admin_enqueue_scripts', 'link_roundups_enqueue_assets' );
 
